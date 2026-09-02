@@ -1,0 +1,442 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  USER
+  MODERATOR
+  ADMIN
+  SUPER_ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  BANNED
+  DEACTIVATED
+}
+
+enum ReactionType {
+  LIKE
+  LOVE
+  LAUGH
+  SAD
+  ANGRY
+}
+
+enum MessageStatus {
+  SENT
+  DELIVERED
+  READ
+  FAILED
+  DELETED
+}
+
+enum ReportCategory {
+  SPAM
+  HARASSMENT
+  SEXUAL_CONTENT
+  HATE
+  VIOLENCE
+  SCAM
+  OTHER
+}
+
+enum ReportStatus {
+  OPEN
+  REVIEWING
+  RESOLVED
+  REJECTED
+}
+
+enum CommunityMemberRole {
+  MEMBER
+  MODERATOR
+  OWNER
+}
+
+model User {
+  id           String      @id @default(cuid())
+  email        String      @unique
+  name         String
+  passwordHash String
+  role                     UserRole    @default(USER)
+  status                   UserStatus  @default(ACTIVE)
+  communityRulesAccepted   Boolean     @default(false)
+  communityRulesAcceptedAt DateTime?
+  rulesVersion             String?
+  createdAt                DateTime    @default(now())
+  updatedAt                DateTime    @updatedAt
+
+  profile              Profile?
+  sessions             Session[]
+  posts                Post[]
+  comments             Comment[]
+  reactions            Reaction[]
+  followsGiven         Follow[] @relation("Follower")
+  followsReceived      Follow[] @relation("Following")
+  blocksGiven          Block[] @relation("Blocker")
+  blocksReceived       Block[] @relation("Blocked")
+  reportsMade          Report[] @relation("Reporter")
+  notifications       Notification[] @relation("NotificationRecipient")
+  conversationsOwnedBy Conversation[] @relation("ConversationOwner")
+  messageSent          Message[] @relation("MessageSender")
+  conversationParticipants ConversationParticipant[]
+  subscriptions       Subscription[]
+  entitlements        Entitlement[]
+  communityMemberships CommunityMember[]
+  ownedCommunities     Community[]
+  adminActions         AdminAction[] @relation("AdminActionActor")
+  actionTargets        AdminAction[] @relation("AdminActionTarget")
+
+  @@index([email])
+  @@index([role])
+  @@index([status])
+}
+
+model Profile {
+  id          String  @id @default(cuid())
+  userId      String  @unique
+  displayName String?
+  username    String?
+  bio         String?
+  avatarUrl   String?
+  coverUrl    String?
+  location    String?
+  website     String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([username])
+}
+
+model Session {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  userAgent String?
+  ipAddress String?
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model Post {
+  id          String   @id @default(cuid())
+  authorId    String
+  communityId String?
+  content     String
+  imageUrl    String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  author    User      @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  community Community? @relation(fields: [communityId], references: [id], onDelete: SetNull)
+  comments  Comment[]
+  reactions Reaction[]
+  reports   Report[]
+
+  @@index([authorId])
+  @@index([communityId])
+  @@index([createdAt])
+}
+
+model Conversation {
+  id                 String   @id @default(cuid())
+  name               String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  lastMessageAt      DateTime?
+  lastMessagePreview String?
+  ownerId            String?
+
+  owner       User?                     @relation("ConversationOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  participants ConversationParticipant[]
+  messages    Message[]
+
+  @@index([ownerId])
+  @@index([updatedAt])
+}
+
+model ConversationParticipant {
+  id          String    @id @default(cuid())
+  conversationId String
+  userId      String
+  role        CommunityMemberRole @default(MEMBER)
+  joinedAt    DateTime  @default(now())
+  lastReadAt  DateTime?
+  leftAt      DateTime?
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, userId])
+  @@index([conversationId])
+  @@index([userId])
+}
+
+model Message {
+  id            String       @id @default(cuid())
+  conversationId String
+  senderId      String
+  text          String
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  readAt        DateTime?
+  deletedAt     DateTime?
+  status        MessageStatus @default(SENT)
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender       User         @relation("MessageSender", fields: [senderId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+  @@index([senderId])
+  @@index([readAt])
+  @@index([status])
+}
+
+model Comment {
+  id        String   @id @default(cuid())
+  postId    String
+  authorId  String
+  parentId  String?
+  content   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  post     Post       @relation(fields: [postId], references: [id], onDelete: Cascade)
+  author   User       @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  parent   Comment?   @relation("CommentReplies", fields: [parentId], references: [id], onDelete: SetNull)
+  replies  Comment[]  @relation("CommentReplies")
+  reactions Reaction[]
+  reports  Report[]
+
+  @@index([postId])
+  @@index([authorId])
+  @@index([parentId])
+}
+
+model Reaction {
+  id        String       @id @default(cuid())
+  userId    String
+  postId    String?
+  commentId String?
+  type      ReactionType
+  createdAt DateTime     @default(now())
+
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  post    Post?    @relation(fields: [postId], references: [id], onDelete: Cascade)
+  comment Comment? @relation(fields: [commentId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, postId, type])
+  @@unique([userId, commentId, type])
+  @@index([postId])
+  @@index([commentId])
+}
+
+model Follow {
+  id          String   @id @default(cuid())
+  followerId  String
+  followingId String
+  createdAt   DateTime @default(now())
+
+  follower  User @relation("Follower", fields: [followerId], references: [id], onDelete: Cascade)
+  following User @relation("Following", fields: [followingId], references: [id], onDelete: Cascade)
+
+  @@unique([followerId, followingId])
+  @@index([followerId])
+  @@index([followingId])
+}
+
+model Block {
+  id        String   @id @default(cuid())
+  blockerId String
+  blockedId String
+  createdAt DateTime @default(now())
+
+  blocker User @relation("Blocker", fields: [blockerId], references: [id], onDelete: Cascade)
+  blocked User @relation("Blocked", fields: [blockedId], references: [id], onDelete: Cascade)
+
+  @@unique([blockerId, blockedId])
+  @@index([blockerId])
+  @@index([blockedId])
+}
+
+model Report {
+  id         String       @id @default(cuid())
+  reporterId String
+  postId     String?
+  commentId  String?
+  category   ReportCategory
+  details    String?
+  status     ReportStatus @default(OPEN)
+  createdAt  DateTime     @default(now())
+  resolvedAt DateTime?
+
+  reporter User    @relation("Reporter", fields: [reporterId], references: [id], onDelete: Cascade)
+  post     Post?   @relation(fields: [postId], references: [id], onDelete: Cascade)
+  comment  Comment? @relation(fields: [commentId], references: [id], onDelete: Cascade)
+
+  @@index([reporterId])
+  @@index([postId])
+  @@index([commentId])
+  @@index([status])
+}
+
+model Notification {
+  id        String    @id @default(cuid())
+  recipientId String
+  actorId   String?
+  type      String
+  message   String
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  recipient User @relation("NotificationRecipient", fields: [recipientId], references: [id], onDelete: Cascade)
+
+  @@index([recipientId, readAt])
+  @@index([createdAt])
+}
+
+model SubscriptionPlan {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  name        String
+  priceCents  Int
+  currency    String   @default("USD")
+  interval    String   @default("month")
+  description String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  subscriptions Subscription[]
+
+  @@index([isActive])
+}
+
+model Subscription {
+  id                 String    @id @default(cuid())
+  userId             String
+  planId             String
+  status             String    @default("ACTIVE")
+  currentPeriodStart DateTime  @default(now())
+  currentPeriodEnd   DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  plan     SubscriptionPlan @relation(fields: [planId], references: [id], onDelete: Restrict)
+  user     User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  payments Payment[]
+
+  @@index([userId, status])
+  @@index([planId])
+}
+
+model Payment {
+  id                 String   @id @default(cuid())
+  subscriptionId     String
+  userId             String
+  provider           String   @default("local")
+  providerReference  String?
+  amountCents        Int
+  currency           String   @default("USD")
+  status             String   @default("PENDING")
+  createdAt          DateTime @default(now())
+
+  subscription Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  @@index([subscriptionId])
+  @@index([userId])
+}
+
+model PaymentWebhookEvent {
+  id              String    @id @default(cuid())
+  provider        String
+  providerEventId String
+  payloadHash     String
+  status          String    @default("RECEIVED")
+  receivedAt      DateTime  @default(now())
+  processedAt     DateTime?
+  errorMessage    String?
+
+  @@unique([provider, providerEventId])
+  @@index([status])
+  @@index([receivedAt])
+}
+
+model Entitlement {
+  id        String   @id @default(cuid())
+  userId    String
+  key       String
+  value     String?
+  source    String   @default("subscription")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, key])
+  @@index([userId])
+}
+
+model Community {
+  id          String   @id @default(cuid())
+  ownerId     String
+  name        String
+  slug        String   @unique
+  description String?
+  avatarUrl   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  owner    User            @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  members  CommunityMember[]
+  posts    Post[]
+
+  @@index([ownerId])
+  @@index([name])
+}
+
+model CommunityMember {
+  id          String               @id @default(cuid())
+  communityId String
+  userId      String
+  role        CommunityMemberRole @default(MEMBER)
+  joinedAt    DateTime            @default(now())
+
+  community Community @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([communityId, userId])
+  @@index([communityId])
+  @@index([userId])
+}
+
+model AdminAction {
+  id          String   @id @default(cuid())
+  actorId     String
+  targetUserId String?
+  actionType  String
+  details     String?
+  createdAt   DateTime @default(now())
+
+  actor       User  @relation("AdminActionActor", fields: [actorId], references: [id], onDelete: Cascade)
+  targetUser  User? @relation("AdminActionTarget", fields: [targetUserId], references: [id], onDelete: SetNull)
+
+  @@index([actorId])
+  @@index([targetUserId])
+  @@index([actionType])
+}
