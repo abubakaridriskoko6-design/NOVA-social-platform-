@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import type { Response } from 'express';
+import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { prisma, isDatabaseAvailable } from '../lib/prisma.js';
 import { socialStore } from '../lib/socialStore.js';
@@ -163,7 +163,7 @@ subscriptionRouter.post('/subscriptions', requireAuth, async (req, res) => {
   return res.status(201).json({ subscription: { ...subscription, plan }, payment });
 });
 
-subscriptionRouter.post('/subscriptions/:id/cancel', requireAuth, async (req, res) => {
+subscriptionRouter.post('/subscriptions/:id/cancel', requireAuth, async (req: Request, res) => {
   const subscriptionId = String(req.params.id);
   const userId = req.user!.id;
   const dbAvailable = await isDatabaseAvailable();
