@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import type { Response } from 'express';
 import { z } from 'zod';
 import { prisma, isDatabaseAvailable } from '../lib/prisma.js';
 import { socialStore } from '../lib/socialStore.js';
@@ -82,7 +83,7 @@ subscriptionRouter.post('/plans', requireAuth, async (req, res) => {
   return res.status(201).json({ plan });
 });
 
-subscriptionRouter.get('/subscriptions/me', requireAuth, async (req, res) => {
+subscriptionRouter.get('/subscriptions/me', requireAuth, async (req, res: Response) => {
   const userId = req.user!.id;
   const dbAvailable = await isDatabaseAvailable();
 
