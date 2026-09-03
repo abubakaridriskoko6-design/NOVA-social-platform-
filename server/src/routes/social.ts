@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import type { Response } from 'express';
 import { z } from 'zod';
 import { prisma, isDatabaseAvailable } from '../lib/prisma.js';
 import { fallbackStore } from '../lib/fallbackStore.js';
@@ -367,7 +368,7 @@ socialRouter.get('/users/:id', async (req, res) => {
   });
 });
 
-socialRouter.get('/users/:id/profile', async (req, res) => {
+socialRouter.get('/users/:id/profile', async (req, res: Response) => {
   const userId = String(req.params.id);
   const user = await getUserById(userId);
 

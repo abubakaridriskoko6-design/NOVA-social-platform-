@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import type { Response } from 'express';
 import { z } from 'zod';
 import { prisma, isDatabaseAvailable } from '../lib/prisma.js';
 import { fallbackStore } from '../lib/fallbackStore.js';
@@ -640,7 +641,7 @@ adminRouter.get('/revenue', requireAdminAccess, async (_req, res) => {
   });
 });
 
-adminRouter.get('/audit-logs', requireAdminAccess, async (_req, res) => {
+adminRouter.get('/audit-logs', requireAdminAccess, async (_req, res: Response) => {
   const logs = await (async () => {
     if (await isDatabaseAvailable()) {
       return prisma.adminAction.findMany({
