@@ -4,6 +4,11 @@ import { z } from 'zod';
 
 dotenv.config({ path: path.resolve(process.cwd(), '.env') });
 
+const runtimeEnvironment = {
+  ...process.env,
+  CORS_ORIGIN: process.env.CORS_ORIGIN?.trim(),
+};
+
 const DEVELOPMENT_JWT_SECRET = 'nova-dev-jwt-secret-key-32-chars-plus';
 
 const envSchema = z.object({
@@ -22,7 +27,7 @@ const envSchema = z.object({
 }).superRefine((data, ctx) => {
   const hasProductionSecret = Boolean(process.env.JWT_SECRET && process.env.JWT_SECRET.length >= 32);
   const hasProductionDatabaseUrl = Boolean(process.env.DATABASE_URL);
-  const hasProductionCorsOrigin = Boolean(process.env.CORS_ORIGIN);
+  const hasProductionCorsOrigin = Boolean(runtimeEnvironment.CORS_ORIGIN);
 
   if (data.NODE_ENV === 'production') {
     if (!hasProductionSecret || data.JWT_SECRET === DEVELOPMENT_JWT_SECRET || data.JWT_SECRET.toLowerCase().includes('replace')) {
@@ -90,6 +95,6 @@ const envSchema = z.object({
   }
 });
 
-export const env = envSchema.parse(process.env);
+export const env = envSchema.parse(runtimeEnvironment);
 
 export default env;
