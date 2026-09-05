@@ -1,187 +1,73 @@
 import { useEffect, useMemo, useState } from 'react'
-import { AlertTriangle, ArrowUpRight, ShieldCheck, Users, FileWarning, DollarSign, Activity, BadgeCheck } from 'lucide-react'
+import { Activity, AlertTriangle, ArrowUpRight, BadgeCheck, Check, ChevronRight, CircleDollarSign, FileWarning, Gavel, LoaderCircle, LockKeyhole, Search, ShieldCheck, UserRound, Users, X } from 'lucide-react'
 import { apiRequest } from '../lib/api'
 import { useAuth } from '../context/AuthContext'
 import { Button } from '../components/ui/Button'
+import { Modal } from '../components/ui/Modal'
+import { SearchBar } from '../components/ui/SearchBar'
 
-type DashboardResponse = {
-  metrics: {
-    totalUsers?: number
-    activeUsers?: number
-    newUsers?: number
-    suspendedUsers?: number
-    bannedUsers?: number
-    totalPosts?: number
-    reportsReceived?: number
-    pendingReports?: number
-    pendingModerationItems?: number
-    resolvedReports?: number
-    activeSubscriptions?: number
-    subscriptionRevenue?: number
-    creatorEarnings?: number
-    platformRevenue?: number
-    pendingPayouts?: number
-    totalReports?: number
-  }
-  recentReports?: Array<Record<string, unknown>>
-  recentModerationActions?: Array<Record<string, unknown>>
-  recentAdminActivity?: Array<Record<string, unknown>>
-}
+type RecordValue = Record<string, unknown>
+type Section = 'overview' | 'users' | 'reports' | 'moderation' | 'appeals' | 'subscriptions' | 'payments' | 'creators' | 'earnings' | 'payouts' | 'revenue' | 'audit'
+type ActionState = { endpoint: string; title: string; description: string; field: 'reason' | 'note' }
+type DashboardResponse = { metrics: Record<string, number>; recentReports?: RecordValue[]; recentModerationActions?: RecordValue[]; recentAdminActivity?: RecordValue[] }
 
-const metricCards = [
-  { label: 'Total users', key: 'totalUsers', icon: Users, tone: 'violet' },
-  { label: 'Active users', key: 'activeUsers', icon: BadgeCheck, tone: 'emerald' },
-  { label: 'Pending reports', key: 'pendingReports', icon: FileWarning, tone: 'amber' },
-  { label: 'Subscription revenue', key: 'subscriptionRevenue', icon: DollarSign, tone: 'cyan' },
-  { label: 'Pending payouts', key: 'pendingPayouts', icon: ArrowUpRight, tone: 'slate' },
-  { label: 'Platform revenue', key: 'platformRevenue', icon: Activity, tone: 'rose' },
-] as const
+const sections: Array<{ id: Section; label: string; icon: typeof Users; adminOnly?: boolean }> = [
+  { id: 'overview', label: 'Overview', icon: Activity }, { id: 'users', label: 'Users', icon: Users, adminOnly: true }, { id: 'reports', label: 'Reports', icon: FileWarning, adminOnly: true }, { id: 'moderation', label: 'Moderation', icon: Gavel }, { id: 'appeals', label: 'Appeals', icon: ShieldCheck, adminOnly: true }, { id: 'subscriptions', label: 'Subscriptions', icon: BadgeCheck, adminOnly: true }, { id: 'payments', label: 'Payments', icon: CircleDollarSign, adminOnly: true }, { id: 'creators', label: 'Creators', icon: UserRound, adminOnly: true }, { id: 'earnings', label: 'Earnings', icon: ArrowUpRight, adminOnly: true }, { id: 'payouts', label: 'Payouts', icon: ArrowUpRight, adminOnly: true }, { id: 'revenue', label: 'Revenue', icon: CircleDollarSign, adminOnly: true }, { id: 'audit', label: 'Audit logs', icon: LockKeyhole, adminOnly: true },
+]
+const metricCards = [{ label: 'Total users', key: 'totalUsers', icon: Users, tone: 'violet' }, { label: 'Active users', key: 'activeUsers', icon: BadgeCheck, tone: 'emerald' }, { label: 'Pending reports', key: 'pendingReports', icon: FileWarning, tone: 'amber' }, { label: 'Subscription revenue', key: 'subscriptionRevenue', icon: CircleDollarSign, tone: 'cyan' }, { label: 'Pending payouts', key: 'pendingPayouts', icon: ArrowUpRight, tone: 'slate' }, { label: 'Platform revenue', key: 'platformRevenue', icon: Activity, tone: 'rose' }] as const
+const labels: Record<string, string> = { id: 'ID', name: 'Name', email: 'Email', role: 'Role', status: 'Status', createdAt: 'Created', category: 'Category', details: 'Details', reason: 'Reason', amountCents: 'Amount', currency: 'Currency', provider: 'Provider', actionType: 'Action', originalAction: 'Original action', reviewerNote: 'Reviewer note' }
+
+function display(value: unknown) { if (value === null || value === undefined || value === '') return '—'; if (typeof value === 'object') return JSON.stringify(value); return String(value) }
+function formatDate(value: unknown) { if (!value) return '—'; const date = new Date(String(value)); return Number.isNaN(date.getTime()) ? display(value) : date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) }
+function formatMoney(value: unknown) { return new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD' }).format(Number(value ?? 0) / 100) }
+function getRows(payload: RecordValue | null, key: string): RecordValue[] { const value = payload?.[key]; return Array.isArray(value) ? value.filter((item): item is RecordValue => typeof item === 'object' && item !== null) : [] }
 
 export function AdminPage() {
   const { user } = useAuth()
-  const [data, setData] = useState<DashboardResponse | null>(null)
+  const isModerator = user?.role === 'MODERATOR'
+  const isAdmin = ['ADMIN', 'SUPER_ADMIN'].includes(user?.role ?? '')
+  const availableSections = sections.filter((section) => !section.adminOnly || isAdmin)
+  const [section, setSection] = useState<Section>(isModerator ? 'moderation' : 'overview')
+  const [payload, setPayload] = useState<RecordValue | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [success, setSuccess] = useState<string | null>(null)
+  const [search, setSearch] = useState('')
+  const [selected, setSelected] = useState<RecordValue | null>(null)
+  const [action, setAction] = useState<ActionState | null>(null)
+  const [actionReason, setActionReason] = useState('')
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const endpoint = section === 'overview' ? '/api/admin/dashboard' : section === 'users' ? '/api/admin/users?limit=100' : section === 'reports' ? '/api/admin/reports?limit=100' : section === 'moderation' ? '/api/admin/moderation/queue' : section === 'appeals' ? '/api/admin/appeals' : `/api/admin/${section === 'audit' ? 'audit-logs' : section}`
 
-  useEffect(() => {
-    async function loadDashboard() {
-      try {
-        const response = await apiRequest<DashboardResponse>('/api/admin/dashboard')
-        setData(response)
-        setError(null)
-      } catch (loadError) {
-        setError(loadError instanceof Error ? loadError.message : 'Unable to load admin dashboard.')
-      } finally {
-        setIsLoading(false)
-      }
+  useEffect(() => { if (!availableSections.some((item) => item.id === section)) setSection(availableSections[0]?.id ?? 'overview') }, [availableSections, section])
+  useEffect(() => { let cancelled = false; setIsLoading(true); setError(null); setPayload(null); void apiRequest<RecordValue>(endpoint).then((response) => { if (!cancelled) setPayload(response) }).catch((loadError) => { if (!cancelled) setError(loadError instanceof Error ? loadError.message : 'Unable to load this section.') }).finally(() => { if (!cancelled) setIsLoading(false) }); return () => { cancelled = true } }, [endpoint])
+
+  const handleAction = async () => { if (!action || !actionReason.trim()) return; setIsSubmitting(true); setError(null); try { const response = await apiRequest<RecordValue>(action.endpoint, { method: 'POST', body: JSON.stringify({ [action.field]: actionReason.trim() }) }); setSuccess(display(response.message) || 'Action completed successfully.'); setAction(null); setActionReason(''); setPayload(await apiRequest<RecordValue>(endpoint)) } catch (actionError) { setError(actionError instanceof Error ? actionError.message : 'Action failed.') } finally { setIsSubmitting(false) } }
+  const handleView = async (row: RecordValue) => {
+    if (!row.id || !['users', 'reports', 'appeals'].includes(section)) { setSelected(row); return }
+    setError(null)
+    try {
+      const response = await apiRequest<RecordValue>(`/api/admin/${section}/${row.id}`)
+      setSelected((response.user ?? response.report ?? response.appeal ?? row) as RecordValue)
+    } catch (detailError) {
+      setError(detailError instanceof Error ? detailError.message : 'Unable to load record details.')
     }
-
-    void loadDashboard()
-  }, [])
-
-  const summary = useMemo(() => {
-    const metrics = data?.metrics ?? {}
-    return metricCards.map((card) => ({
-      ...card,
-      value: metrics[card.key] ?? 0,
-    }))
-  }, [data])
-
-  if (user && !['ADMIN', 'SUPER_ADMIN'].includes(user.role ?? 'USER')) {
-    return (
-      <div className="p-6 text-sm text-slate-600">
-        You do not have access to the admin dashboard.
-      </div>
-    )
   }
+  const filteredUsers = useMemo(() => getRows(payload, 'users').filter((item) => `${item.name ?? ''} ${item.email ?? ''} ${item.username ?? ''}`.toLowerCase().includes(search.toLowerCase())), [payload, search])
+  const rows = section === 'users' ? filteredUsers : section === 'reports' ? getRows(payload, 'reports') : section === 'moderation' ? getRows(payload, 'items') : section === 'appeals' ? getRows(payload, 'appeals') : section === 'audit' ? getRows(payload, 'logs') : section === 'earnings' ? getRows(payload, 'payments') : section === 'revenue' ? getRows(payload, 'metrics').concat(payload?.metrics && typeof payload.metrics === 'object' ? [payload.metrics as RecordValue] : []) : getRows(payload, section)
+  if (!user || !['ADMIN', 'SUPER_ADMIN', 'MODERATOR'].includes(user.role ?? '')) return <div className="p-6 text-sm text-slate-600">You do not have access to the admin center.</div>
 
-  if (isLoading) {
-    return <div className="p-6 text-sm text-slate-600">Loading dashboard…</div>
-  }
-
-  if (error) {
-    return (
-      <div className="p-6">
-        <div className="rounded-3xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
-          {error}
-        </div>
-      </div>
-    )
-  }
-
-  const recentReports = data?.recentReports ?? []
-  const recentActivity = data?.recentAdminActivity ?? []
-  const moderationActions = data?.recentModerationActions ?? []
-
-  return (
-    <div className="space-y-6 p-4 sm:p-6">
-      <header className="flex flex-col gap-3 rounded-[28px] border border-slate-200 bg-white p-5 shadow-sm sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.28em] text-violet-600">Operations</p>
-          <h1 className="mt-2 text-2xl font-semibold text-slate-900">Administration dashboard</h1>
-        </div>
-        <div className="inline-flex items-center gap-2 rounded-full bg-violet-50 px-3 py-2 text-sm font-medium text-violet-700">
-          <ShieldCheck className="h-4 w-4" aria-hidden="true" />
-          Protected admin view
-        </div>
-      </header>
-
-      <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-        {summary.map(({ label, value, icon: Icon, tone }) => (
-          <div key={label} className="rounded-[24px] border border-slate-200 bg-white p-4 shadow-sm">
-            <div className="flex items-center justify-between">
-              <p className="text-sm text-slate-500">{label}</p>
-              <span className={`flex h-9 w-9 items-center justify-center rounded-2xl ${tone === 'violet' ? 'bg-violet-100 text-violet-700' : tone === 'emerald' ? 'bg-emerald-100 text-emerald-700' : tone === 'amber' ? 'bg-amber-100 text-amber-700' : tone === 'cyan' ? 'bg-cyan-100 text-cyan-700' : tone === 'slate' ? 'bg-slate-100 text-slate-700' : 'bg-rose-100 text-rose-700'}`}>
-                <Icon className="h-4 w-4" aria-hidden="true" />
-              </span>
-            </div>
-            <p className="mt-5 text-3xl font-semibold text-slate-900">{value}</p>
-          </div>
-        ))}
-      </section>
-
-      <section className="grid gap-6 xl:grid-cols-2">
-        <div className="rounded-[28px] border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
-          <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-slate-900">Recent reports</h2>
-            <Button variant="ghost" size="sm" className="text-violet-700">Review all</Button>
-          </div>
-          <div className="space-y-3">
-            {recentReports.length === 0 ? (
-              <div className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-500">No reports yet.</div>
-            ) : (
-              recentReports.slice(0, 5).map((report, index) => (
-                <div key={String(report.id ?? index)} className="flex items-center justify-between rounded-2xl bg-slate-50 px-3 py-2 text-sm">
-                  <div>
-                    <p className="font-medium text-slate-800">{String(report.category ?? 'Report')}</p>
-                    <p className="text-xs text-slate-500">{String(report.details ?? report.reason ?? 'No summary')}</p>
-                  </div>
-                  <span className="rounded-full bg-amber-100 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-amber-700">
-                    {String(report.status ?? 'OPEN')}
-                  </span>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-
-        <div className="rounded-[28px] border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
-          <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-slate-900">Recent moderation actions</h2>
-            <AlertTriangle className="h-4 w-4 text-amber-600" aria-hidden="true" />
-          </div>
-          <div className="space-y-3">
-            {moderationActions.length === 0 ? (
-              <div className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-500">No moderation actions found.</div>
-            ) : (
-              moderationActions.slice(0, 5).map((action, index) => (
-                <div key={String((action as any).id ?? index)} className="rounded-2xl bg-slate-50 p-3 text-sm text-slate-600">
-                  <p className="font-medium text-slate-800">{String((action as any).actionType ?? 'Action')}</p>
-                  <p className="mt-1 text-xs text-slate-500">{String((action as any).details ?? 'No details')}</p>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-      </section>
-
-      <section className="rounded-[28px] border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-slate-900">Recent admin activity</h2>
-        </div>
-        <div className="space-y-3">
-          {recentActivity.length === 0 ? (
-            <div className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-500">No recent admin actions.</div>
-          ) : (
-            recentActivity.slice(0, 6).map((entry, index) => (
-              <div key={String((entry as any).id ?? index)} className="flex items-center justify-between rounded-2xl bg-slate-50 px-3 py-2 text-sm text-slate-600">
-                <span className="font-medium text-slate-800">{String((entry as any).actionType ?? 'Admin action')}</span>
-                <span className="text-xs text-slate-500">{String((entry as any).createdAt ?? 'recently')}</span>
-              </div>
-            ))
-          )}
-        </div>
-      </section>
-    </div>
-  )
+  return <div className="space-y-5 p-4 pb-24 sm:p-6"><header className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-sm"><div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-xs font-semibold uppercase tracking-[0.28em] text-violet-600">Operations</p><h1 className="mt-2 text-2xl font-semibold text-slate-900">Management center</h1><p className="mt-1 text-sm text-slate-500">Keep NOVA healthy, helpful, and moving.</p></div><div className="inline-flex w-fit items-center gap-2 rounded-full bg-violet-50 px-3 py-2 text-sm font-medium text-violet-700"><ShieldCheck className="h-4 w-4" aria-hidden="true" />{isModerator ? 'Moderator access' : 'Protected admin view'}</div></div><nav className="mt-5 -mx-1 flex gap-1 overflow-x-auto px-1 pb-1" aria-label="Admin sections">{availableSections.map(({ id, label, icon: Icon }) => <button key={id} type="button" onClick={() => { setSection(id); setSearch(''); setSuccess(null) }} className={`flex shrink-0 items-center gap-2 rounded-full px-3 py-2 text-sm font-medium transition ${section === id ? 'bg-violet-600 text-white' : 'text-slate-600 hover:bg-slate-100'}`}><Icon className="h-4 w-4" aria-hidden="true" />{label}</button>)}</nav></header>
+    {success ? <div className="flex items-center gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700"><Check className="h-4 w-4" aria-hidden="true" />{success}<button className="ml-auto" onClick={() => setSuccess(null)} aria-label="Dismiss success"><X className="h-4 w-4" /></button></div> : null}{error ? <div className="flex items-center gap-2 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700"><AlertTriangle className="h-4 w-4" aria-hidden="true" />{error}</div> : null}
+    {section === 'overview' && payload ? <Overview data={payload as DashboardResponse} onNavigate={setSection} /> : null}{section !== 'overview' ? <section className="rounded-[28px] border border-slate-200 bg-white p-4 shadow-sm sm:p-5"><div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><h2 className="text-xl font-semibold text-slate-900">{sections.find((item) => item.id === section)?.label}</h2><p className="mt-1 text-sm text-slate-500">{rows.length} record{rows.length === 1 ? '' : 's'} returned by the API.</p></div>{section === 'users' || section === 'reports' ? <SearchBar value={search} onChange={setSearch} placeholder={`Search ${section}...`} /> : null}</div>{isLoading ? <LoadingState /> : rows.length === 0 ? <EmptyState label={section === 'moderation' ? 'The moderation queue is clear.' : 'No records found in this section.'} /> : <DataTable section={section} rows={rows} onView={handleView} onAction={setAction} />}</section> : null}{isLoading && section === 'overview' ? <LoadingState /> : null}
+    {selected ? <DetailModal item={selected} onClose={() => setSelected(null)} /> : null}<Modal open={Boolean(action)} title={action?.title ?? 'Confirm action'} onClose={() => { if (!isSubmitting) { setAction(null); setActionReason('') } }}><p className="text-sm text-slate-600">{action?.description}</p><label className="mt-4 block text-sm font-medium text-slate-700">{action?.field === 'note' ? 'Note' : 'Reason'}<textarea value={actionReason} onChange={(event) => setActionReason(event.target.value)} rows={4} className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100" placeholder="Enter a reason for the audit trail..." /></label><div className="mt-4 flex justify-end gap-2"><Button variant="ghost" onClick={() => setAction(null)} disabled={isSubmitting}>Cancel</Button><Button onClick={() => void handleAction()} disabled={isSubmitting || !actionReason.trim()} icon={isSubmitting ? <LoaderCircle className="h-4 w-4 animate-spin" /> : undefined}>Confirm</Button></div></Modal></div>
 }
+
+function Overview({ data, onNavigate }: { data: DashboardResponse; onNavigate: (section: Section) => void }) { return <><section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">{metricCards.map(({ label, key, icon: Icon, tone }) => <div key={label} className="rounded-[24px] border border-slate-200 bg-white p-4 shadow-sm"><div className="flex items-center justify-between"><p className="text-sm text-slate-500">{label}</p><span className={`flex h-9 w-9 items-center justify-center rounded-2xl ${tone === 'violet' ? 'bg-violet-100 text-violet-700' : tone === 'emerald' ? 'bg-emerald-100 text-emerald-700' : tone === 'amber' ? 'bg-amber-100 text-amber-700' : tone === 'cyan' ? 'bg-cyan-100 text-cyan-700' : tone === 'slate' ? 'bg-slate-100 text-slate-700' : 'bg-rose-100 text-rose-700'}`}><Icon className="h-4 w-4" aria-hidden="true" /></span></div><p className="mt-5 text-3xl font-semibold text-slate-900">{key.toLowerCase().includes('revenue') || key === 'pendingPayouts' ? formatMoney(data.metrics?.[key]) : display(data.metrics?.[key] ?? 0)}</p></div>)}</section><div className="grid gap-6 xl:grid-cols-2"><ActivityPanel title="Recent reports" rows={data.recentReports ?? []} onClick={() => onNavigate('reports')} /><ActivityPanel title="Recent moderation actions" rows={data.recentModerationActions ?? []} onClick={() => onNavigate('moderation')} /></div><ActivityPanel title="Recent admin activity" rows={data.recentAdminActivity ?? []} /></> }
+function ActivityPanel({ title, rows, onClick }: { title: string; rows: RecordValue[]; onClick?: () => void }) { return <section className="rounded-[28px] border border-slate-200 bg-white p-4 shadow-sm sm:p-5"><div className="mb-4 flex items-center justify-between"><h2 className="text-lg font-semibold text-slate-900">{title}</h2>{onClick ? <Button variant="ghost" size="sm" onClick={onClick}>Review all<ChevronRight className="h-4 w-4" /></Button> : null}</div>{rows.length === 0 ? <EmptyState label="Nothing to show yet." /> : <div className="space-y-3">{rows.slice(0, 6).map((row, index) => <div key={String(row.id ?? index)} className="rounded-2xl bg-slate-50 p-3 text-sm"><div className="flex items-center justify-between gap-3"><p className="font-medium text-slate-800">{display(row.category ?? row.actionType ?? row.status ?? 'Admin activity')}</p><span className="text-xs text-slate-500">{formatDate(row.createdAt)}</span></div><p className="mt-1 truncate text-xs text-slate-500">{display(row.details ?? row.reason ?? row.message ?? 'No details')}</p></div>)}</div>}</section> }
+function DataTable({ section, rows, onView, onAction }: { section: Section; rows: RecordValue[]; onView: (row: RecordValue) => void; onAction: (action: ActionState) => void }) { const columns = section === 'users' ? ['name', 'email', 'role', 'status', 'createdAt'] : section === 'reports' || section === 'moderation' ? ['category', 'status', 'details', 'createdAt'] : section === 'audit' ? ['actionType', 'details', 'createdAt'] : section === 'appeals' ? ['originalAction', 'status', 'reason', 'createdAt'] : section === 'revenue' ? ['grossRevenue', 'platformRevenue', 'creatorNetEarnings', 'pendingPayouts'] : ['id', 'status', 'amountCents', 'createdAt']; return <div className="overflow-x-auto"><table className="w-full min-w-[680px] text-left text-sm"><thead><tr className="border-b border-slate-200 text-xs uppercase tracking-[0.14em] text-slate-500">{columns.map((column) => <th key={column} className="px-3 py-3 font-semibold">{labels[column] ?? column}</th>)}<th className="px-3 py-3 text-right">Actions</th></tr></thead><tbody>{rows.map((row, index) => <tr key={String(row.id ?? index)} className="border-b border-slate-100 last:border-0 hover:bg-slate-50"><td className="px-3 py-3 font-medium text-slate-800">{display(row[columns[0]])}</td>{columns.slice(1).map((column) => <td key={column} className="max-w-[220px] truncate px-3 py-3 text-slate-600">{column === 'createdAt' ? formatDate(row[column]) : column.toLowerCase().includes('revenue') || column === 'pendingPayouts' || column === 'grossRevenue' ? formatMoney(row[column]) : display(row[column])}</td>)}<td className="px-3 py-3"><div className="flex justify-end gap-2"><Button variant="ghost" size="sm" onClick={() => onView(row)}>View</Button>{section === 'users' ? <UserActions row={row} onAction={onAction} /> : null}{section === 'reports' ? <><ActionButton label="Resolve" onClick={() => onAction({ endpoint: `/api/admin/reports/${row.id}/resolve`, title: 'Resolve report', description: 'Mark this report resolved and add a note to the audit trail.', field: 'note' })} /><ActionButton label="Reject" danger onClick={() => onAction({ endpoint: `/api/admin/reports/${row.id}/reject`, title: 'Reject report', description: 'Reject this report and add a note to the audit trail.', field: 'note' })} /></> : null}{section === 'moderation' ? <><ActionButton label="Remove" danger onClick={() => onAction({ endpoint: `/api/admin/moderation/${row.id}/remove`, title: 'Remove content', description: 'Confirm removal of this moderation item.', field: 'note' })} /><ActionButton label="Approve" onClick={() => onAction({ endpoint: `/api/admin/moderation/${row.id}/approve`, title: 'Approve content', description: 'Confirm that this moderation item is safe to approve.', field: 'note' })} /></> : null}{section === 'appeals' ? <><ActionButton label="Approve" onClick={() => onAction({ endpoint: `/api/admin/appeals/${row.id}/approve`, title: 'Approve appeal', description: 'Confirm approval of this appeal.', field: 'note' })} /><ActionButton label="Reject" danger onClick={() => onAction({ endpoint: `/api/admin/appeals/${row.id}/reject`, title: 'Reject appeal', description: 'Confirm rejection of this appeal.', field: 'note' })} /></> : null}</div></td></tr>)}</tbody></table></div> }
+function UserActions({ row, onAction }: { row: RecordValue; onAction: (action: ActionState) => void }) { const status = String(row.status ?? 'ACTIVE'); if (status === 'BANNED') return <ActionButton label="Unban" onClick={() => onAction({ endpoint: `/api/admin/users/${row.id}/unban`, title: 'Unban user', description: 'Restore this account to active status.', field: 'reason' })} />; if (status === 'SUSPENDED') return <><ActionButton label="Unsuspend" onClick={() => onAction({ endpoint: `/api/admin/users/${row.id}/unsuspend`, title: 'Unsuspend user', description: 'Restore this account to active status.', field: 'reason' })} /><ActionButton label="Ban" danger onClick={() => onAction({ endpoint: `/api/admin/users/${row.id}/ban`, title: 'Ban user', description: 'This is a destructive account action.', field: 'reason' })} /></>; return <><ActionButton label="Suspend" danger onClick={() => onAction({ endpoint: `/api/admin/users/${row.id}/suspend`, title: 'Suspend user', description: 'Restrict this account until an administrator restores it.', field: 'reason' })} /><ActionButton label="Ban" danger onClick={() => onAction({ endpoint: `/api/admin/users/${row.id}/ban`, title: 'Ban user', description: 'This is a destructive account action.', field: 'reason' })} /></> }
+function ActionButton({ label, danger, onClick }: { label: string; danger?: boolean; onClick: () => void }) { return <button type="button" onClick={onClick} className={`text-xs font-semibold ${danger ? 'text-rose-600 hover:text-rose-800' : 'text-violet-700 hover:text-violet-900'}`}>{label}</button> }
+function LoadingState() { return <div className="flex items-center justify-center rounded-2xl bg-slate-50 p-10 text-sm text-slate-500"><LoaderCircle className="mr-2 h-4 w-4 animate-spin" />Loading from NOVA...</div> }
+function EmptyState({ label }: { label: string }) { return <div className="rounded-2xl bg-slate-50 p-8 text-center text-sm text-slate-500"><Search className="mx-auto mb-2 h-5 w-5 text-slate-400" />{label}</div> }
+function DetailModal({ item, onClose }: { item: RecordValue; onClose: () => void }) { const entries = Object.entries(item).filter(([key]) => !['id', 'profile', 'user', 'post', 'comment'].includes(key)); return <Modal open title="Record details" onClose={onClose}><div className="space-y-3">{entries.map(([key, value]) => <div key={key} className="grid grid-cols-[120px_1fr] gap-3 border-b border-slate-100 pb-2 text-sm"><dt className="font-medium text-slate-500">{labels[key] ?? key}</dt><dd className="break-words text-slate-800">{key.toLowerCase().includes('date') || key.endsWith('At') ? formatDate(value) : display(value)}</dd></div>)}</div></Modal> }

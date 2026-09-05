@@ -38,8 +38,8 @@ export function AppShell({ children }: AppShellProps) {
   const location = useLocation()
   const navigate = useNavigate()
   const { user, logout, isLoading } = useAuth()
-  const isAdmin = ['ADMIN', 'SUPER_ADMIN'].includes(user?.role ?? 'USER')
-  const navItems = isAdmin
+  const canAccessAdmin = ['ADMIN', 'SUPER_ADMIN', 'MODERATOR'].includes(user?.role ?? 'USER')
+  const navItems = canAccessAdmin
     ? [...sidebarItems, { label: 'Admin', path: '/admin', icon: BriefcaseBusiness }]
     : sidebarItems
 

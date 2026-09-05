@@ -51,7 +51,7 @@ function AdminRoute() {
     return <Navigate to="/login" replace />
   }
 
-  if (!['ADMIN', 'SUPER_ADMIN'].includes(user?.role ?? 'USER')) {
+  if (!['ADMIN', 'SUPER_ADMIN', 'MODERATOR'].includes(user?.role ?? 'USER')) {
     return <Navigate to="/" replace />
   }
 
