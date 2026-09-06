@@ -42,7 +42,25 @@ export function AdminPage() {
   useEffect(() => { if (!availableSections.some((item) => item.id === section)) setSection(availableSections[0]?.id ?? 'overview') }, [availableSections, section])
   useEffect(() => { let cancelled = false; setIsLoading(true); setError(null); setPayload(null); void apiRequest<RecordValue>(endpoint).then((response) => { if (!cancelled) setPayload(response) }).catch((loadError) => { if (!cancelled) setError(loadError instanceof Error ? loadError.message : 'Unable to load this section.') }).finally(() => { if (!cancelled) setIsLoading(false) }); return () => { cancelled = true } }, [endpoint])
 
-  const handleAction = async () => { if (!action || !actionReason.trim()) return; setIsSubmitting(true); setError(null); try { const response = await apiRequest<RecordValue>(action.endpoint, { method: 'POST', body: JSON.stringify({ [action.field]: actionReason.trim() }) }); setSuccess(display(response.message) || 'Action completed successfully.'); setAction(null); setActionReason(''); setPayload(await apiRequest<RecordValue>(endpoint)) } catch (actionError) { setError(actionError instanceof Error ? actionError.message : 'Action failed.') } finally { setIsSubmitting(false) } }
+  const handleAction = async () => {
+    if (!action || !actionReason.trim()) return;
+    setIsSubmitting(true);
+    setError(null);
+    try {
+      const response = await apiRequest<RecordValue>(action.endpoint, {
+        method: "POST",
+        body: JSON.stringify({ [action.field]: actionReason.trim() })
+      });
+      setSuccess(display(response.message) || "Action completed successfully.");
+      setAction(null);
+      setActionReason("");
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : "Action failed.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   const handleView = async (row: RecordValue) => {
     if (!row.id || !['users', 'reports', 'appeals'].includes(section)) { setSelected(row); return }
     setError(null)
