@@ -24,7 +24,7 @@ function parsePagination(req: any) {
 
 async function trackAdminAction(actorId: string, targetUserId: string | null, actionType: string, details: string | null) {
   if (await isDatabaseAvailable()) {
-    await prisma.adminAction.create({
+    void prisma.adminAction.create({
       data: {
         actorId,
         targetUserId,
