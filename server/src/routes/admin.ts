@@ -286,23 +286,9 @@ adminRouter.get('/users', requireAdminAccess, async (req, res) => {
 adminRouter.get('/users/:id', requireAdminAccess, async (req, res) => {
   const targetId = String(req.params.id);
   const user = await (async () => {
-    if (await isDatabaseAvailable()) {
-      return prisma.user.findUnique({
-        where: { id: targetId },
-        select: {
-          id: true,
-          email: true,
-          name: true,
-          role: true,
-          status: true,
-          createdAt: true,
-          updatedAt: true,
-          profile: { select: { displayName: true, username: true, bio: true, avatarUrl: true, location: true } },
-        },
-      });
-    }
-
-    return fallbackStore.findById(targetId) ?? null;
+    if (process.env.NODE_ENV !== "production") return fallbackStore.findById(targetId);
+    if (await isDatabaseAvailable()) return prisma.user.findUnique({ where: { id: targetId }, select: { id: true, status: true, name: true, email: true, role: true } });
+    return null;
   })();
 
   if (!user) {
@@ -313,17 +299,34 @@ adminRouter.get('/users/:id', requireAdminAccess, async (req, res) => {
   return res.json({ user: normalizeUser(user), reports, moderationHistory: reports });
 });
 
-async function updateUserStatus(targetId: string, newStatus: string, reason: string, actor: any) {
-  const user = fallbackStore.findById(targetId) ?? await (async () => {
-    if (await isDatabaseAvailable()) {
-      return prisma.user.findUnique({ where: { id: targetId }, select: { id: true, status: true, name: true, email: true, role: true } });
+async function updateUserStatus(
+  targetId: string,
+  newStatus: string,
+  reason: string,
+  actor: { id: string; role: string }
+) {
+  const user = await (async () => {
+    if (process.env.NODE_ENV !== 'production') {
+      return fallbackStore.findById(targetId);
     }
-    return null;
+
+    if (!(await isDatabaseAvailable())) {
+      return null;
+    }
+
+    return prisma.user.findUnique({
+      where: { id: targetId },
+      select: {
+        id: true,
+        status: true,
+        name: true,
+        email: true,
+        role: true,
+      },
+    });
   })();
 
-  if (!user) {
-    return null;
-  }
+  if (!user) return null;
 
   const previousStatus = user.status ?? 'ACTIVE';
 
@@ -331,21 +334,51 @@ async function updateUserStatus(targetId: string, newStatus: string, reason: str
     const updated = await prisma.user.update({
       where: { id: targetId },
       data: { status: newStatus as any },
-      select: { id: true, email: true, name: true, status: true, role: true },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        status: true,
+        role: true,
+      },
     });
-    await trackAdminAction(actor.id, targetId, `USER_${newStatus}`, reason);
-    return { user: normalizeUser(updated), previousStatus, message: `User was ${newStatus.toLowerCase()}.` };
+
+    await trackAdminAction(
+      actor.id,
+      targetId,
+      `USER_${newStatus}`,
+      reason
+    );
+
+    return {
+      user: normalizeUser(updated),
+      previousStatus,
+      message: `User was ${newStatus.toLowerCase()}.`,
+    };
   }
 
-  const updated = fallbackStore.updateUser(targetId, { status: newStatus as any });
+  if (process.env.NODE_ENV === 'production') {
+    return null;
+  }
+
+  const updated = fallbackStore.updateUser(targetId, {
+    status: newStatus as any,
+  });
+
   fallbackStore.createAdminAction({
     actorId: actor.id,
     targetUserId: targetId,
     actionType: `USER_${newStatus}`,
-    details: `${reason}`,
+    details: reason,
   });
 
-  return { user: normalizeUser(updated), previousStatus, message: `User was ${newStatus.toLowerCase()}.` };
+  if (!updated) return null;
+
+  return {
+    user: normalizeUser(updated),
+    previousStatus,
+    message: `User was ${newStatus.toLowerCase()}.`,
+  };
 }
 
 adminRouter.post('/users/:id/suspend', requireAdminAccess, async (req, res) => {
